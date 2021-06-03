@@ -6,7 +6,7 @@ use std::mem::size_of;
 
 use vm_memory::{Address, ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemory};
 
-use vm_virtio::Queue;
+use virtio_queue::Queue;
 
 struct Ref<'a, M, T> {
     mem: &'a M,

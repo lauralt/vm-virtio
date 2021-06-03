@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use vm_memory::GuestAddressSpace;
 
-use crate::device::{VirtioDevice, WithDriverSelect};
-use crate::Queue;
+use crate::{VirtioDevice, WithDriverSelect};
+use virtio_queue::Queue;
 
 /// An object that provides a common virtio device configuration representation. It is not part
 /// of the main `vm-virtio` set of interfaces, but rather can be used as a helper object in
@@ -233,7 +233,7 @@ pub(crate) mod tests {
 
     use vm_memory::{GuestAddress, GuestMemoryMmap};
 
-    use crate::device::mmio::VirtioMmioDevice;
+    use crate::mmio::VirtioMmioDevice;
 
     use super::*;
 

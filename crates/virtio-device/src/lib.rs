@@ -17,10 +17,14 @@ use std::result;
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 
-use crate::Queue;
+use virtio_queue::Queue;
 
 pub use mmio::VirtioMmioDevice;
 pub use virtio_config::{VirtioConfig, VirtioDeviceActions, VirtioDeviceType};
+
+#[macro_use]
+extern crate log;
+extern crate vm_memory;
 
 // TODO: Bring this (and other feature definitions) to the vm-virtio crate proper.
 // Using a local const temporarily until then.
@@ -238,8 +242,8 @@ pub trait WithDriverSelect<M: GuestAddressSpace>: VirtioDevice<M> {
 
 #[cfg(test)]
 mod tests {
-    use crate::device::status::*;
-    use crate::device::virtio_config::tests::Dummy;
+    use crate::status::*;
+    use crate::virtio_config::tests::Dummy;
 
     use super::*;
 

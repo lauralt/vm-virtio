@@ -20,9 +20,12 @@ use vm_memory::{
     Address, ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemory, GuestMemoryError,
 };
 
-pub(super) const VIRTQ_DESC_F_NEXT: u16 = 0x1;
-pub(super) const VIRTQ_DESC_F_WRITE: u16 = 0x2;
-pub(super) const VIRTQ_DESC_F_INDIRECT: u16 = 0x4;
+#[macro_use]
+extern crate log;
+
+pub const VIRTQ_DESC_F_NEXT: u16 = 0x1;
+pub const VIRTQ_DESC_F_WRITE: u16 = 0x2;
+pub const VIRTQ_DESC_F_INDIRECT: u16 = 0x4;
 
 const VIRTQ_USED_ELEMENT_SIZE: u64 = 8;
 // Used ring header: flags (u16) + idx (u16)
@@ -715,7 +718,7 @@ impl<M: GuestAddressSpace> Queue<M> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
 
     use std::marker::PhantomData;
