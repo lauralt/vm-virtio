@@ -18,6 +18,9 @@ log = ">=0.4.6"
 criterion = "0.3.0"
 vm-memory = { version = ">=0.4.0", features = ["backend-mmap", "backend-atomic" ] }
 
+[features]
+test_utilities = []
+
 [[bench]]
 name = "main"
 harness = false

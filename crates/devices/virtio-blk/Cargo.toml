@@ -21,3 +21,4 @@ virtio-device = { path = "../../virtio-device" }
 
 [dev-dependencies]
 vm-memory = { version = ">=0.4.0", features = ["backend-mmap", "backend-atomic" ] }
+virtio-queue = { path = "../../virtio-queue", features = ["test_utilities"] }

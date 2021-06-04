@@ -31,7 +31,7 @@ use crate::defs::{
         VIRTIO_BLK_T_OUT, VIRTIO_BLK_T_WRITE_ZEROES,
 };
 
-use virtio_queue::{DescriptorChain, Descriptor};
+use virtio_queue::{DescriptorChain, Descriptor, VIRTQ_DESC_F_WRITE};
 use vm_memory::{
     ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemory, GuestMemoryError,
 };
@@ -224,6 +224,9 @@ impl Request {
             sector: request_header.sector,
             status_addr: GuestAddress(0),
         };
+        let desc = Descriptor::new(0x10_0000, 0x100, VIRTQ_DESC_F_WRITE, 0);
+
+        assert_eq!(desc.len(), 0x101);
 
         let mut desc = desc_chain.next().ok_or(Error::DescriptorChainTooShort)?;
 
@@ -240,6 +243,15 @@ impl Request {
         request.status_addr = status_desc.addr();
         Ok(request)
     }
+
+    ///
+    pub fn bla() -> Result<()> {
+        let desc = Descriptor::new(0x10_0000, 0x100, VIRTQ_DESC_F_WRITE, 0);
+
+        assert_eq!(desc.len(), 0x101);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -248,7 +260,7 @@ mod tests {
 
     use vm_memory::{Address, GuestMemoryMmap};
 
-    use virtio_queue::tests::VirtQueue;
+   // use virtio_queue::VirtqDesc;
     use virtio_queue::{VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE};
 
     impl PartialEq for Error {
@@ -284,221 +296,228 @@ mod tests {
         }
     }
 
-    // Helper method that writes a descriptor chain to a `GuestMemoryMmap` object and returns
-    // the associated `DescriptorChain` object. `descs` represents a slice of `Descriptor` objects
-    // which are used to populate the chain. This method ensures the next flags and values are
-    // set properly for the desired chain, but keeps the other characteristics of the input
-    // descriptors (`addr`, `len`, other flags).
-    // The queue/descriptor chain related information is written in memory starting with
-    // address 0. The `addr` fields of the input descriptors should start at a sufficiently
-    // greater location (i.e. 1MiB, or `0x10_0000`).
-    fn build_desc_chain<'a>(
-        mem: &'a GuestMemoryMmap,
-        descs: &[Descriptor],
-    ) -> DescriptorChain<&'a GuestMemoryMmap> {
-        // Support a max of 16 descriptors for now.
-        let vq = VirtQueue::new(GuestAddress(0), mem, 16);
-        for (idx, desc) in descs.iter().enumerate() {
-            let i = idx as u16;
-            vq.dtable(i).addr().store(desc.addr().0);
-            vq.dtable(i).len().store(desc.len());
-
-            if idx == descs.len() - 1 {
-                // Clear the NEXT flag if it was set. The value of the next field of the
-                // Descriptor doesn't matter at this point.
-                vq.dtable(i)
-                    .flags()
-                    .store(desc.flags() & !VIRTQ_DESC_F_NEXT);
-            } else {
-                // Ensure the next flag is set.
-                vq.dtable(i).flags().store(desc.flags() | VIRTQ_DESC_F_NEXT);
-                // Ensure we are referring the following descriptor. This ignores
-                // any value is actually present in `desc.next`.
-                vq.dtable(i).next().store(i + 1);
-            }
-        }
-
-        // Put the descriptor index 0 in the first available ring position.
-        mem.write_obj(0u16, vq.avail_start().unchecked_add(4))
-            .unwrap();
-
-        // Set `avail_idx` to 1.
-        mem.write_obj(1u16, vq.avail_start().unchecked_add(2))
-            .unwrap();
-
-        vq.create_queue(mem)
-            .iter()
-            .unwrap()
-            .next()
-            .expect("failed to build desc chain")
+     #[test]
+     fn test_parse_request() {
+         let descr = Descriptor::new(0x10_0000, 0x100, VIRTQ_DESC_F_WRITE, 0);
+         assert_eq!(0, 0);
+         let req = Request::bla().unwrap();
     }
 
-    #[test]
-    fn test_parse_request() {
-        let mem = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000_0000)]).unwrap();
-        // The `build_desc_chain` function will populate the `NEXT` related flags and field.
-        let v = vec![
-            // A device-writable request header descriptor.
-            Descriptor::new(0x10_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-            Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-            Descriptor::new(0x30_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-        ];
-        let mut chain = build_desc_chain(&mem, &v[..3]);
-
-        let req_header = RequestHeader {
-            request_type: VIRTIO_BLK_T_IN,
-            _reserved: 0,
-            sector: 2,
-        };
-        mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
-            .unwrap();
-        // Request header descriptor should be device-readable.
-        assert_eq!(
-            Request::parse(&mut chain).unwrap_err(),
-            Error::UnexpectedWriteOnlyDescriptor
-        );
-
-        let v = vec![
-            Descriptor::new(0x10_0000, 0x100, 0, 0),
-            Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-            // A device-readable request status descriptor.
-            Descriptor::new(0x30_0000, 0x100, 0, 0),
-        ];
-        let mut chain = build_desc_chain(&mem, &v[..3]);
-
-        // Status descriptor should be device-writable.
-        assert_eq!(
-            Request::parse(&mut chain).unwrap_err(),
-            Error::UnexpectedReadOnlyDescriptor
-        );
-
-        let v = vec![
-            Descriptor::new(0x10_0000, 0x100, 0, 0),
-            Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-            // Status descriptor with len = 0.
-            Descriptor::new(0x30_0000, 0x0, VIRTQ_DESC_F_WRITE, 0),
-        ];
-        let mut chain = build_desc_chain(&mem, &v[..3]);
-        assert_eq!(
-            Request::parse(&mut chain).unwrap_err(),
-            Error::DescriptorLengthTooSmall
-        );
-
-        let v = vec![
-            Descriptor::new(0x10_0000, 0x100, 0, 0),
-            Descriptor::new(0x20_0000, 0x100, 0, 0),
-            Descriptor::new(0x30_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-        ];
-        let mut chain = build_desc_chain(&mem, &v[..3]);
-
-        // Flush request with sector != 0.
-        let req_header = RequestHeader {
-            request_type: VIRTIO_BLK_T_FLUSH,
-            _reserved: 0,
-            sector: 1,
-        };
-        mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
-            .unwrap();
-
-        // Sector must be 0 for a VIRTIO_BLK_T_FLUSH request.
-        assert_eq!(
-            Request::parse(&mut chain).unwrap_err(),
-            Error::InvalidFlushSector
-        );
-
-        let mut chain = build_desc_chain(&mem, &v[..3]);
-        mem.write_obj::<u32>(VIRTIO_BLK_T_IN, GuestAddress(0x10_0000))
-            .unwrap();
-        // We shouldn't read from a device-readable buffer.
-        assert_eq!(
-            Request::parse(&mut chain).unwrap_err(),
-            Error::UnexpectedReadOnlyDescriptor
-        );
-
-        // Invalid status address.
-        let v = vec![
-            Descriptor::new(0x10_0000, 0x100, 0, 0),
-            Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-            Descriptor::new(0x30_0000, 0x200, VIRTQ_DESC_F_WRITE, 0),
-            Descriptor::new(0x1100_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-        ];
-        let req_header = RequestHeader {
-            request_type: VIRTIO_BLK_T_OUT,
-            _reserved: 0,
-            sector: 2,
-        };
-        mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
-            .unwrap();
-
-        let mut chain = build_desc_chain(&mem, &v[..4]);
-
-        // The status descriptor would cause a write beyond capacity.
-        assert_eq!(
-            Request::parse(&mut chain).unwrap_err(),
-            Error::GuestMemory(GuestMemoryError::InvalidGuestAddress(GuestAddress(
-                0x1100_0000,
-            )))
-        );
-
-        // Valid descriptor chain for OUT.
-        let v = vec![
-            Descriptor::new(0x10_0000, 0x100, 0, 0),
-            Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-            Descriptor::new(0x30_0000, 0x200, VIRTQ_DESC_F_WRITE, 0),
-            Descriptor::new(0x40_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-        ];
-        let req_header = RequestHeader {
-            request_type: VIRTIO_BLK_T_OUT,
-            _reserved: 0,
-            sector: 2,
-        };
-        mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
-            .unwrap();
-
-        let mut chain = build_desc_chain(&mem, &v[..4]);
-
-        let request = Request::parse(&mut chain).unwrap();
-        let expected_request = Request {
-            request_type: RequestType::Out,
-            data: vec![
-                (GuestAddress(0x20_0000), 0x100),
-                (GuestAddress(0x30_0000), 0x200),
-            ],
-            sector: 2,
-            status_addr: GuestAddress(0x40_0000),
-        };
-        assert_eq!(request, expected_request);
-        assert_eq!(request.status_addr(), GuestAddress(0x40_0000));
-        assert_eq!(request.total_data_len(), 0x100 + 0x200);
-
-        // Request header with unsupported request type.
-        let req_header = RequestHeader {
-            request_type: 2,
-            _reserved: 0,
-            sector: 2,
-        };
-        mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
-            .unwrap();
-
-        let mut chain = build_desc_chain(&mem, &v[..4]);
-
-        let request = Request::parse(&mut chain).unwrap();
-        assert_eq!(request.request_type(), RequestType::Unsupported(2));
-
-        // Valid descriptor chain for FLUSH.
-        let v = vec![
-            Descriptor::new(0x10_0000, 0x100, 0, 0),
-            Descriptor::new(0x40_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
-        ];
-        let req_header = RequestHeader {
-            request_type: VIRTIO_BLK_T_FLUSH,
-            _reserved: 0,
-            sector: 0,
-        };
-        mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
-            .unwrap();
-
-        let mut chain = build_desc_chain(&mem, &v[..2]);
-        assert!(Request::parse(&mut chain).is_ok());
-    }
+    // // Helper method that writes a descriptor chain to a `GuestMemoryMmap` object and returns
+    // // the associated `DescriptorChain` object. `descs` represents a slice of `Descriptor` objects
+    // // which are used to populate the chain. This method ensures the next flags and values are
+    // // set properly for the desired chain, but keeps the other characteristics of the input
+    // // descriptors (`addr`, `len`, other flags).
+    // // The queue/descriptor chain related information is written in memory starting with
+    // // address 0. The `addr` fields of the input descriptors should start at a sufficiently
+    // // greater location (i.e. 1MiB, or `0x10_0000`).
+    // fn build_desc_chain<'a>(
+    //     mem: &'a GuestMemoryMmap,
+    //     descs: &[Descriptor],
+    // ) -> DescriptorChain<&'a GuestMemoryMmap> {
+    //     // Support a max of 16 descriptors for now.
+    //     let vq = VirtQueue::new(GuestAddress(0), mem, 16);
+    //     for (idx, desc) in descs.iter().enumerate() {
+    //         let i = idx as u16;
+    //         vq.dtable(i).addr().store(desc.addr().0);
+    //         vq.dtable(i).len().store(desc.len());
+    //
+    //         if idx == descs.len() - 1 {
+    //             // Clear the NEXT flag if it was set. The value of the next field of the
+    //             // Descriptor doesn't matter at this point.
+    //             vq.dtable(i)
+    //                 .flags()
+    //                 .store(desc.flags() & !VIRTQ_DESC_F_NEXT);
+    //         } else {
+    //             // Ensure the next flag is set.
+    //             vq.dtable(i).flags().store(desc.flags() | VIRTQ_DESC_F_NEXT);
+    //             // Ensure we are referring the following descriptor. This ignores
+    //             // any value is actually present in `desc.next`.
+    //             vq.dtable(i).next().store(i + 1);
+    //         }
+    //     }
+    //
+    //     // Put the descriptor index 0 in the first available ring position.
+    //     mem.write_obj(0u16, vq.avail_start().unchecked_add(4))
+    //         .unwrap();
+    //
+    //     // Set `avail_idx` to 1.
+    //     mem.write_obj(1u16, vq.avail_start().unchecked_add(2))
+    //         .unwrap();
+    //
+    //     vq.create_queue(mem)
+    //         .iter()
+    //         .unwrap()
+    //         .next()
+    //         .expect("failed to build desc chain")
+    // }
+    //
+    // #[test]
+    // fn test_parse_request() {
+    //     let mem = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000_0000)]).unwrap();
+    //     // The `build_desc_chain` function will populate the `NEXT` related flags and field.
+    //     let v = vec![
+    //         // A device-writable request header descriptor.
+    //         Descriptor::new(0x10_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //         Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //         Descriptor::new(0x30_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //     ];
+    //     let mut chain = build_desc_chain(&mem, &v[..3]);
+    //
+    //     let req_header = RequestHeader {
+    //         request_type: VIRTIO_BLK_T_IN,
+    //         _reserved: 0,
+    //         sector: 2,
+    //     };
+    //     mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //     // Request header descriptor should be device-readable.
+    //     assert_eq!(
+    //         Request::parse(&mut chain).unwrap_err(),
+    //         Error::UnexpectedWriteOnlyDescriptor
+    //     );
+    //
+    //     let v = vec![
+    //         Descriptor::new(0x10_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //         // A device-readable request status descriptor.
+    //         Descriptor::new(0x30_0000, 0x100, 0, 0),
+    //     ];
+    //     let mut chain = build_desc_chain(&mem, &v[..3]);
+    //
+    //     // Status descriptor should be device-writable.
+    //     assert_eq!(
+    //         Request::parse(&mut chain).unwrap_err(),
+    //         Error::UnexpectedReadOnlyDescriptor
+    //     );
+    //
+    //     let v = vec![
+    //         Descriptor::new(0x10_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //         // Status descriptor with len = 0.
+    //         Descriptor::new(0x30_0000, 0x0, VIRTQ_DESC_F_WRITE, 0),
+    //     ];
+    //     let mut chain = build_desc_chain(&mem, &v[..3]);
+    //     assert_eq!(
+    //         Request::parse(&mut chain).unwrap_err(),
+    //         Error::DescriptorLengthTooSmall
+    //     );
+    //
+    //     let v = vec![
+    //         Descriptor::new(0x10_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x20_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x30_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //     ];
+    //     let mut chain = build_desc_chain(&mem, &v[..3]);
+    //
+    //     // Flush request with sector != 0.
+    //     let req_header = RequestHeader {
+    //         request_type: VIRTIO_BLK_T_FLUSH,
+    //         _reserved: 0,
+    //         sector: 1,
+    //     };
+    //     mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //
+    //     // Sector must be 0 for a VIRTIO_BLK_T_FLUSH request.
+    //     assert_eq!(
+    //         Request::parse(&mut chain).unwrap_err(),
+    //         Error::InvalidFlushSector
+    //     );
+    //
+    //     let mut chain = build_desc_chain(&mem, &v[..3]);
+    //     mem.write_obj::<u32>(VIRTIO_BLK_T_IN, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //     // We shouldn't read from a device-readable buffer.
+    //     assert_eq!(
+    //         Request::parse(&mut chain).unwrap_err(),
+    //         Error::UnexpectedReadOnlyDescriptor
+    //     );
+    //
+    //     // Invalid status address.
+    //     let v = vec![
+    //         Descriptor::new(0x10_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //         Descriptor::new(0x30_0000, 0x200, VIRTQ_DESC_F_WRITE, 0),
+    //         Descriptor::new(0x1100_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //     ];
+    //     let req_header = RequestHeader {
+    //         request_type: VIRTIO_BLK_T_OUT,
+    //         _reserved: 0,
+    //         sector: 2,
+    //     };
+    //     mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //
+    //     let mut chain = build_desc_chain(&mem, &v[..4]);
+    //
+    //     // The status descriptor would cause a write beyond capacity.
+    //     assert_eq!(
+    //         Request::parse(&mut chain).unwrap_err(),
+    //         Error::GuestMemory(GuestMemoryError::InvalidGuestAddress(GuestAddress(
+    //             0x1100_0000,
+    //         )))
+    //     );
+    //
+    //     // Valid descriptor chain for OUT.
+    //     let v = vec![
+    //         Descriptor::new(0x10_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x20_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //         Descriptor::new(0x30_0000, 0x200, VIRTQ_DESC_F_WRITE, 0),
+    //         Descriptor::new(0x40_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //     ];
+    //     let req_header = RequestHeader {
+    //         request_type: VIRTIO_BLK_T_OUT,
+    //         _reserved: 0,
+    //         sector: 2,
+    //     };
+    //     mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //
+    //     let mut chain = build_desc_chain(&mem, &v[..4]);
+    //
+    //     let request = Request::parse(&mut chain).unwrap();
+    //     let expected_request = Request {
+    //         request_type: RequestType::Out,
+    //         data: vec![
+    //             (GuestAddress(0x20_0000), 0x100),
+    //             (GuestAddress(0x30_0000), 0x200),
+    //         ],
+    //         sector: 2,
+    //         status_addr: GuestAddress(0x40_0000),
+    //     };
+    //     assert_eq!(request, expected_request);
+    //     assert_eq!(request.status_addr(), GuestAddress(0x40_0000));
+    //     assert_eq!(request.total_data_len(), 0x100 + 0x200);
+    //
+    //     // Request header with unsupported request type.
+    //     let req_header = RequestHeader {
+    //         request_type: 2,
+    //         _reserved: 0,
+    //         sector: 2,
+    //     };
+    //     mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //
+    //     let mut chain = build_desc_chain(&mem, &v[..4]);
+    //
+    //     let request = Request::parse(&mut chain).unwrap();
+    //     assert_eq!(request.request_type(), RequestType::Unsupported(2));
+    //
+    //     // Valid descriptor chain for FLUSH.
+    //     let v = vec![
+    //         Descriptor::new(0x10_0000, 0x100, 0, 0),
+    //         Descriptor::new(0x40_0000, 0x100, VIRTQ_DESC_F_WRITE, 0),
+    //     ];
+    //     let req_header = RequestHeader {
+    //         request_type: VIRTIO_BLK_T_FLUSH,
+    //         _reserved: 0,
+    //         sector: 0,
+    //     };
+    //     mem.write_obj::<RequestHeader>(req_header, GuestAddress(0x10_0000))
+    //         .unwrap();
+    //
+    //     let mut chain = build_desc_chain(&mem, &v[..2]);
+    //     assert!(Request::parse(&mut chain).is_ok());
+    // }
 }
